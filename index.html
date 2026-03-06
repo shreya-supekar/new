@@ -3,39 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hand Gesture Locomotion Template</title>
+    <title>Comprehensive VR Hand Locomotion</title>
     
-    <!-- A-Frame 1.5.0 library -->
+    <!-- A-Frame 1.5.0 library: The backbone of our WebXR experience -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
     <script>
-        // ---------------------------------------------------------
-        // 1. Environment Scatter Component
-        // Generates random pillars to give you a sense of scale, 
-        // depth, and movement speed in the plain world.
-        // ---------------------------------------------------------
+        /**
+         * 1. ENVIRONMENT SCATTER
+         * Generates a structural playpen. Having static objects is crucial in VR 
+         * to provide parallax, which helps the brain perceive movement and scale.
+         */
         AFRAME.registerComponent('environment-scatter', {
             init: function () {
-                const colors = ['#4CC3D9', '#EF2D5E', '#FFC65D', '#7BC8A4', '#9B59B6'];
-                const numPillars = 80;
+                const colors = ['#2C3E50', '#E74C3C', '#F1C40F', '#1ABC9C', '#9B59B6'];
+                const numPillars = 120; // Increased density for better parallax
                 
                 for (let i = 0; i < numPillars; i++) {
                     let box = document.createElement('a-box');
                     
-                    // Random positions between -30 and 30 meters
-                    let x = (Math.random() - 0.5) * 60;
-                    let z = (Math.random() - 0.5) * 60;
+                    // Spread across a 100x100m arena
+                    let x = (Math.random() - 0.5) * 100;
+                    let z = (Math.random() - 0.5) * 100;
                     
-                    // Keep the central spawn area clear so you don't spawn inside a box
-                    if (Math.abs(x) < 3 && Math.abs(z) < 3) continue;
+                    // Keep the absolute center (spawn point) clear of obstacles
+                    if (Math.abs(x) < 5 && Math.abs(z) < 5) continue;
                     
-                    let h = Math.random() * 4 + 0.5; // Random height between 0.5m and 4.5m
+                    let h = Math.random() * 8 + 1.0; 
                     let color = colors[Math.floor(Math.random() * colors.length)];
                     
                     box.setAttribute('position', { x: x, y: h / 2, z: z });
                     box.setAttribute('height', h);
-                    box.setAttribute('width', 0.6);
-                    box.setAttribute('depth', 0.6);
+                    box.setAttribute('width', Math.random() * 1.5 + 0.5);
+                    box.setAttribute('depth', Math.random() * 1.5 + 0.5);
                     box.setAttribute('color', color);
                     box.setAttribute('shadow', 'cast: true; receive: true');
                     
@@ -44,35 +44,47 @@
             }
         });
 
-        // ---------------------------------------------------------
-        // 3. Optic Flow Dust (NEW for Quest 3S Affordance)
-        // Creates infinite particles around you to provide immediate 
-        // visual feedback of your speed and direction.
-        // ---------------------------------------------------------
+        /**
+         * 2. OPTIC FLOW DUST
+         * A classic VR comfort technique. Infinite particles that wrap around the player.
+         * Gives a sensation of speed and grounds the vestibular system.
+         */
         AFRAME.registerComponent('optic-flow-dust', {
             init: function() {
-                this.count = 400;
-                this.range = 15; // 15 meter box of dust
+                this.count = 600;
+                this.range = 20; // A 20m bounding box of dust that travels with the rig
                 const geometry = new THREE.BufferGeometry();
                 const positions = new Float32Array(this.count * 3);
-                for(let i=0; i<this.count*3; i++) {
+                
+                for(let i = 0; i < this.count * 3; i++) {
                     positions[i] = (Math.random() - 0.5) * this.range;
                 }
+                
                 geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                const material = new THREE.PointsMaterial({color: 0xffffff, size: 0.04, transparent: true, opacity: 0.6});
+                const material = new THREE.PointsMaterial({
+                    color: 0xffffff, 
+                    size: 0.05, 
+                    transparent: true, 
+                    opacity: 0.5,
+                    blending: THREE.AdditiveBlending // Makes dust glow slightly
+                });
+                
                 this.points = new THREE.Points(geometry, material);
                 this.el.setObject3D('mesh', this.points);
             },
+            
             tick: function() {
+                // To keep dust infinite, we teleport particles that fall behind the player
+                // back to the front, creating an endless treadmill effect.
                 const rigPos = document.querySelector('#rig').object3D.position;
                 const positions = this.points.geometry.attributes.position.array;
                 
-                for(let i=0; i<this.count; i++) {
+                for(let i = 0; i < this.count; i++) {
                     let dx = positions[i*3] - rigPos.x;
                     let dy = positions[i*3+1] - rigPos.y;
                     let dz = positions[i*3+2] - rigPos.z;
                     
-                    // Wrap particles around the player to make them infinite
+                    // Wrap X, Y, and Z axes
                     if (dx > this.range/2) positions[i*3] -= this.range;
                     if (dx < -this.range/2) positions[i*3] += this.range;
                     if (dy > this.range/2) positions[i*3+1] -= this.range;
@@ -84,185 +96,290 @@
             }
         });
 
-        // ---------------------------------------------------------
-        // 2. Hand Locomotion Component (Optimized for Quest 3S)
-        // Tracks "pinch" gesture with momentum, easing, and local delta tracking.
-        // ---------------------------------------------------------
+        /**
+         * 3. COMPREHENSIVE HAND LOCOMOTION ENGINE
+         * The core system. Handles state, WebXR event routing, matrix math for spaces,
+         * momentum physics, elastic tethers, and emergency braking.
+         */
         AFRAME.registerComponent('hand-locomotion', {
             schema: {
-                speed: { type: 'number', default: 1.5 },
-                damping: { type: 'number', default: 0.92 } // Momentum friction
+                acceleration: { type: 'number', default: 45.0 }, // Thrust multiplier
+                maxSpeed: { type: 'number', default: 12.0 },     // Hard cap on velocity (m/s)
+                damping: { type: 'number', default: 0.90 },      // Glide friction (1 = none, 0 = instant stop)
+                deadzone: { type: 'number', default: 0.04 },     // Meters of pull required before moving (ignores jitters)
+                worldLimit: { type: 'number', default: 48.0 }    // Invisible walls to keep player on grid
             },
 
             init: function () {
-                this.activeHand = null;
-                this.lastLocalPos = new THREE.Vector3();
-                this.velocity = new THREE.Vector3();
+                // --- State Machine ---
+                this.activeHand = null;         // The hand driving the rig
                 this.isPinching = false;
+                this.brakeEngaged = false;      // True if secondary hand pinches
+                
+                // --- Physics Vectors ---
+                this.startPinchLocal = new THREE.Vector3(); // The Anchor
+                this.latestPinchWorld = null;               // The Hand
+                this.velocity = new THREE.Vector3();        // Rig momentum
+                
+                // --- UI Elements ---
+                this.indicator = document.querySelector('#grab-indicator');
+                this.debugText = document.querySelector('#dashboard-text');
 
+                // Bind events to this component scope
                 this.onPinchStart = this.onPinchStart.bind(this);
                 this.onPinchMove = this.onPinchMove.bind(this);
                 this.onPinchEnd = this.onPinchEnd.bind(this);
             },
 
             play: function () {
+                // Attach to hands dynamically. WebXR might initialize hands AFTER play() fires.
                 const attachEvents = (hand) => {
                     hand.addEventListener('pinchstarted', this.onPinchStart);
                     hand.addEventListener('pinchmoved', this.onPinchMove);
                     hand.addEventListener('pinchended', this.onPinchEnd);
                 };
 
-                const hands = document.querySelectorAll('[hand-tracking-controls]');
-                hands.forEach(attachEvents);
+                // Catch hands already in the DOM
+                document.querySelectorAll('[hand-tracking-controls]').forEach(attachEvents);
 
+                // Catch hands injected later by the WebXR API
                 this.el.sceneEl.addEventListener('child-attached', (evt) => {
                     if (evt.detail.el.hasAttribute('hand-tracking-controls')) {
                         attachEvents(evt.detail.el);
                     }
                 });
                 
-                const debug = document.querySelector('#debug-text');
-                if(debug) debug.setAttribute('value', 'Quest 3S Optimized.\nPinch & drag to move!');
+                this.updateDashboard('SYSTEM ONLINE\nPinch to drive. Pinch both to brake.', '#00FFaa');
             },
 
-            onPinchStart: function (evt) {
-                if (this.isPinching) return;
-                this.activeHand = evt.target;
-                this.isPinching = true;
-                this.velocity.set(0, 0, 0); // Stop momentum when grabbing
-                
-                const debug = document.querySelector('#debug-text');
-                if(debug) debug.setAttribute('value', 'Grabbing Space...');
-
-                // Convert exact world pinch pos to local space to avoid feedback loops
-                this.el.object3D.updateMatrixWorld(true);
-                this.lastLocalPos = this.el.object3D.worldToLocal(evt.detail.position.clone());
-
-                const indicator = document.querySelector('#grab-indicator');
-                if (indicator) {
-                    indicator.setAttribute('visible', 'true');
-                    indicator.object3D.position.copy(evt.detail.position);
+            updateDashboard: function(text, color) {
+                if (this.debugText) {
+                    this.debugText.setAttribute('value', text);
+                    if (color) this.debugText.setAttribute('color', color);
                 }
             },
 
-            onPinchMove: function (evt) {
-                if (this.activeHand !== evt.target) return;
+            onPinchStart: function (evt) {
+                // EMERGENCY BRAKE: If a hand is already driving, and the OTHER hand pinches -> BRAKE.
+                if (this.isPinching && this.activeHand !== evt.target) {
+                    this.brakeEngaged = true;
+                    this.velocity.set(0, 0, 0); // Kill all momentum immediately
+                    this.updateDashboard('EMERGENCY BRAKE!', '#FF0000');
+                    return;
+                }
 
-                let worldPos = evt.detail.position;
-                if (!worldPos) return;
-
-                // Update visual orb
-                const indicator = document.querySelector('#grab-indicator');
-                if (indicator) indicator.object3D.position.copy(worldPos);
-
-                // 1. Get current local pinch position
+                // Normal Drive Start
+                if (this.isPinching) return; 
+                this.activeHand = evt.target;
+                this.isPinching = true;
+                this.brakeEngaged = false;
+                
+                // 1. Capture exact fingertip world coordinates from WebXR API
+                this.latestPinchWorld = evt.detail.position.clone();
+                
+                // 2. MATRIX MATH: Convert World -> Local
+                // We MUST update the world matrix first to ensure we aren't using last frame's stale data.
+                // We convert the world pinch to Rig-Local space. This anchors the starting point to the player's body.
+                // If we didn't do this, the anchor would stay behind in the world as the player moves forward!
                 this.el.object3D.updateMatrixWorld(true);
-                let currentLocalPos = this.el.object3D.worldToLocal(worldPos.clone());
+                this.startPinchLocal.copy(this.el.object3D.worldToLocal(this.latestPinchWorld.clone()));
 
-                // 2. Calculate true physical delta
-                let delta = new THREE.Vector3().subVectors(currentLocalPos, this.lastLocalPos);
+                // 3. Setup UI Visuals
+                if (this.indicator) {
+                    this.indicator.setAttribute('visible', 'true');
+                    this.indicator.object3D.position.copy(this.startPinchLocal); 
+                }
+                
+                // Initialize the visual tether line
+                this.el.setAttribute('line', {
+                    start: this.startPinchLocal,
+                    end: this.startPinchLocal,
+                    color: '#00FF00',
+                    opacity: 0.8
+                });
+            },
 
-                // 3. Apply movement
-                let moveVector = delta.clone().multiplyScalar(-this.data.speed);
-                this.el.object3D.position.add(moveVector);
-
-                // 4. Record velocity for momentum glide (scaled roughly for 60-90hz)
-                this.velocity.copy(moveVector).multiplyScalar(70);
-
-                // 5. Update last local pos
-                this.lastLocalPos.copy(currentLocalPos);
+            onPinchMove: function (evt) {
+                // We only care about the hand actively driving
+                if (this.activeHand !== evt.target) return;
+                
+                if (evt.detail.position) {
+                    this.latestPinchWorld = evt.detail.position.clone();
+                }
             },
 
             onPinchEnd: function (evt) {
+                // If the braking hand is released, just lift the brake lock
+                if (this.brakeEngaged && this.activeHand !== evt.target) {
+                    this.brakeEngaged = false;
+                    return;
+                }
+
+                // If the driving hand is released, enter Glide phase
                 if (this.activeHand === evt.target) {
                     this.isPinching = false;
                     this.activeHand = null;
-                    
-                    const debug = document.querySelector('#debug-text');
-                    if(debug) debug.setAttribute('value', 'Gliding...');
+                    this.latestPinchWorld = null;
+                    this.brakeEngaged = false;
 
-                    const indicator = document.querySelector('#grab-indicator');
-                    if (indicator) indicator.setAttribute('visible', 'false');
+                    // Clean up UI
+                    if (this.indicator) this.indicator.setAttribute('visible', 'false');
+                    this.el.removeAttribute('line'); // Remove tether
+                    this.updateDashboard('GLIDING...', '#FFD700');
                 }
             },
             
             tick: function (time, timeDelta) {
-                // Apply Momentum / Glide when not actively pinching
-                if (!this.isPinching && this.velocity.lengthSq() > 0.0001) {
-                    let dt = timeDelta / 1000;
-                    let step = this.velocity.clone().multiplyScalar(dt);
-                    this.el.object3D.position.add(step);
+                // Normalize delta time to seconds (usually ~0.011s for 90hz)
+                let dt = timeDelta / 1000;
+                // Cap delta time to prevent physics explosions if the headset freezes temporarily
+                if (dt > 0.1) dt = 0.1; 
+
+                // --- 1. DRIVING PHASE ---
+                if (this.isPinching && this.latestPinchWorld && !this.brakeEngaged) {
                     
-                    // Apply friction (damping)
-                    this.velocity.multiplyScalar(this.data.damping);
-                    
-                    // Stop text when fully stopped
-                    if(this.velocity.lengthSq() < 0.001) {
-                        const debug = document.querySelector('#debug-text');
-                        if(debug && debug.getAttribute('value') === 'Gliding...') {
-                            debug.setAttribute('value', 'System Ready.');
+                    // Convert hand's current world position to Rig-Local space
+                    this.el.object3D.updateMatrixWorld(true);
+                    let currentPinchLocal = this.el.object3D.worldToLocal(this.latestPinchWorld.clone());
+
+                    // Calculate the JoyStick Vector (from Anchor to Hand)
+                    let pullOffset = new THREE.Vector3().subVectors(currentPinchLocal, this.startPinchLocal);
+                    let pullDistance = pullOffset.length();
+
+                    // Process Deadzone & Acceleration
+                    if (pullDistance < this.data.deadzone) {
+                        // Hand is inside the deadzone (no thrust applied)
+                        pullOffset.set(0, 0, 0);
+                        this.updateDashboard(`Speed: ${this.velocity.length().toFixed(1)} m/s`, '#FFF');
+                        
+                        // Update Tether to look neutral
+                        this.el.setAttribute('line', { end: currentPinchLocal, color: '#FFFFFF' });
+                    } else {
+                        // Subtract deadzone so acceleration starts smoothly at 0
+                        pullOffset.setLength(pullDistance - this.data.deadzone);
+                        
+                        // INVERT VECTOR: Pulling back pushes rig forward
+                        pullOffset.multiplyScalar(-1);
+
+                        // Apply thrust (F = ma) scaled by delta time
+                        let thrust = pullOffset.clone().multiplyScalar(this.data.acceleration * dt);
+                        this.velocity.add(thrust);
+
+                        // Clamp velocity to maximum speed limit
+                        if (this.velocity.length() > this.data.maxSpeed) {
+                            this.velocity.setLength(this.data.maxSpeed);
                         }
+
+                        // Update Dash
+                        let speed = this.velocity.length();
+                        this.updateDashboard(`THRUST: ${speed.toFixed(1)} m/s`, '#00FFAA');
+
+                        // Update Tether Color based on how hard they are pulling
+                        // Green -> Yellow -> Red gradient approximation
+                        let stretchRatio = Math.min((pullDistance - this.data.deadzone) / 0.3, 1.0); 
+                        let r = Math.floor(255 * stretchRatio);
+                        let g = Math.floor(255 * (1 - stretchRatio + 0.5)); // Stays high slightly longer
+                        let hexColor = "#" + ((1 << 24) + (r << 16) + (g << 8) + 0).toString(16).slice(1);
+                        
+                        this.el.setAttribute('line', { end: currentPinchLocal, color: hexColor });
                     }
                 }
+
+                // --- 2. MOVEMENT & FRICTION PHASE ---
+                if (this.velocity.lengthSq() > 0.0001) {
+                    // Apply velocity to rig position (P' = P + V*dt)
+                    let moveStep = this.velocity.clone().multiplyScalar(dt);
+                    this.el.object3D.position.add(moveStep);
+                    
+                    // Framerate-independent friction
+                    // If running at 60fps, dt*60 = 1. Applies full damping.
+                    // If running at 120fps, dt*60 = 0.5. Applies square root of damping (less per frame, equal over time).
+                    let friction = Math.pow(this.data.damping, dt * 60);
+                    this.velocity.multiplyScalar(friction);
+                } else {
+                    // Force complete stop to prevent floating point drift
+                    this.velocity.set(0,0,0);
+                    if (!this.isPinching && this.debugText && this.debugText.getAttribute('value') === 'GLIDING...') {
+                        this.updateDashboard('SYSTEM ONLINE\nPinch to drive. Pinch both to brake.', '#00FFaa');
+                    }
+                }
+
+                // --- 3. WORLD BOUNDARIES ---
+                // Keeps player inside the designated play area
+                let pos = this.el.object3D.position;
+                let limit = this.data.worldLimit;
+                
+                // X Axis (Left/Right bounds)
+                if (pos.x > limit) { pos.x = limit; this.velocity.x = 0; }
+                if (pos.x < -limit) { pos.x = -limit; this.velocity.x = 0; }
+                
+                // Z Axis (Forward/Backward bounds)
+                if (pos.z > limit) { pos.z = limit; this.velocity.z = 0; }
+                if (pos.z < -limit) { pos.z = -limit; this.velocity.z = 0; }
+                
+                // Y Axis (Height bounds). 
+                // Hard floor at Y=0 so you don't sink. Ceiling at Y=20.
+                if (pos.y < 0) { pos.y = 0; this.velocity.y = 0; }
+                if (pos.y > 20) { pos.y = 20; this.velocity.y = 0; }
             }
         });
     </script>
 </head>
 <body>
-    <!-- The VR Scene with explicit Hand Tracking requested for Meta Browser -->
-    <a-scene background="color: #1a1a1a" shadow="type: pcfsoft" webxr="optionalFeatures: hand-tracking, hit-test;">
+    <!-- The VR Scene. Hand-tracking explicitly requested for WebXR. -->
+    <a-scene background="color: #0b0c10" shadow="type: pcfsoft" webxr="optionalFeatures: hand-tracking, hit-test;">
         
-        <!-- Optic Flow Dust (Infinite floating particles) -->
+        <!-- Environment Modules -->
         <a-entity optic-flow-dust></a-entity>
-
-        <!-- Generated scatter environment (pillars) -->
         <a-entity environment-scatter></a-entity>
 
-        <!-- Instructions Panel text for the user -->
-        <a-entity position="0 1.8 -3" rotation="0 0 0">
-            <a-text value="VR Locomotion Template\n\nPinch your thumb and index finger\ntogether, then drag to pull the world." align="center" width="4" color="#FFF"></a-text>
+        <!-- Start Menu / Instructions -->
+        <a-entity position="0 2.5 -4" rotation="0 0 0">
+            <a-text value="ELASTIC DRIVE LOCOMOTION" align="center" width="6" color="#66FCF1" position="0 0.5 0"></a-text>
+            <a-text value="1. Pinch your fingers to create an anchor.\n2. Pull your hand away from the anchor to accelerate.\n3. The visual tether shows your throttle power.\n4. Pinch your OTHER hand to slam the emergency brakes." align="center" width="4" color="#C5C6C7"></a-text>
         </a-entity>
 
-        <!-- Visual Grab Indicator (Appears precisely where you pinch) -->
-        <a-sphere id="grab-indicator" radius="0.04" color="#FFD700" opacity="0.6" visible="false" shadow="cast: false"></a-sphere>
+        <!-- Lighting for depth and shadows -->
+        <a-light type="ambient" color="#404040"></a-light>
+        <a-light type="directional" position="5 10 -5" intensity="1.2" shadow="cast: true; shadowMapHeight: 2048; shadowMapWidth: 2048; shadowCameraNear: -10;"></a-light>
+        <a-light type="point" position="0 3 0" intensity="0.5" color="#66FCF1"></a-light>
 
-        <!-- Basic Lighting -->
-        <a-light type="ambient" color="#666"></a-light>
-        <a-light type="directional" position="2 5 3" intensity="0.8" shadow="cast: true"></a-light>
-
-        <!-- Plain Floor Plane with an infinite SVG Grid Texture -->
+        <!-- Infinite Floor Grid -->
         <a-plane 
             position="0 0 0" 
             rotation="-90 0 0" 
-            width="100" 
-            height="100" 
-            material="src: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100' height='100' fill='%232a2a2a'/%3E%3Cpath d='M100 0 L0 0 0 100' fill='none' stroke='%234a4a4a' stroke-width='2'/%3E%3C/svg%3E); repeat: 100 100" 
+            width="200" 
+            height="200" 
+            material="src: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%231f2833'/%3E%3Cpath d='M200 0 L0 0 0 200' fill='none' stroke='%2345a29e' stroke-width='1' opacity='0.3'/%3E%3C/svg%3E); repeat: 200 200; roughness: 0.8; metalness: 0.2;" 
             shadow="receive: true">
         </a-plane>
 
         <!-- 
-          PLAYER RIG 
-          Attach the `hand-locomotion` component here. 
+          === PLAYER RIG ===
+          The hand-locomotion script is attached here. 
+          The Rig acts as the physical 'body', carrying the camera (eyes) and hands with it.
         -->
-        <a-entity id="rig" hand-locomotion="speed: 1.5">
+        <a-entity id="rig" hand-locomotion="acceleration: 45.0; maxSpeed: 12.0; damping: 0.90; deadzone: 0.04;">
             
-            <!-- Player Camera -->
+            <!-- Camera (Head) -->
             <a-camera position="0 1.6 0">
-                <!-- Debug Text Attached to Camera to give real-time feedback -->
-                <a-text id="debug-text" value="Loading Locomotion..." position="0 -0.2 -0.8" align="center" width="1.5" color="#FFD700" opacity="0.8"></a-text>
+                <!-- Dashboard UI locked to the user's view -->
+                <a-entity position="0 -0.4 -0.8">
+                    <a-plane width="0.8" height="0.2" color="#0b0c10" opacity="0.8" border-radius="0.05"></a-plane>
+                    <a-text id="dashboard-text" value="Loading Systems..." position="0 0 0.01" align="center" width="1.2" color="#66FCF1"></a-text>
+                </a-entity>
             </a-camera>
+
+            <!-- 
+              Visual Anchor Indicator.
+              Must be placed inside the Rig so it maintains its local spatial relationship 
+              to the player's body when the rig moves.
+            -->
+            <a-sphere id="grab-indicator" radius="0.025" color="#66FCF1" opacity="0.9" visible="false" material="shader: flat;"></a-sphere>
             
-            <!-- Left Hand Tracking -->
-            <a-entity 
-                id="leftHand" 
-                hand-tracking-controls="hand: left; modelColor: #d1d1d1;">
-            </a-entity>
-            
-            <!-- Right Hand Tracking -->
-            <a-entity 
-                id="rightHand" 
-                hand-tracking-controls="hand: right; modelColor: #d1d1d1;">
-            </a-entity>
+            <!-- Hand Controllers configured specifically for Quest hand tracking -->
+            <a-entity id="leftHand" hand-tracking-controls="hand: left; modelStyle: dots; modelColor: #45a29e;"></a-entity>
+            <a-entity id="rightHand" hand-tracking-controls="hand: right; modelStyle: dots; modelColor: #45a29e;"></a-entity>
             
         </a-entity>
 
