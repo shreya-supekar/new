@@ -3,39 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Comprehensive VR Hand Locomotion</title>
+    <title>VR Hand Locomotion – Fixed & Smooth</title>
     
-    <!-- A-Frame 1.5.0 library: The backbone of our WebXR experience -->
+    <!-- A-Frame 1.5.0 -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    </style>
+
     <script>
-        /**
-         * 1. ENVIRONMENT SCATTER
-         * Generates a structural playpen. Having static objects is crucial in VR 
-         * to provide parallax, which helps the brain perceive movement and scale.
-         */
+        // =============================================
+        // 1. ENVIRONMENT SCATTER (fewer objects, cleaner)
+        // =============================================
         AFRAME.registerComponent('environment-scatter', {
             init: function () {
                 const colors = ['#2C3E50', '#E74C3C', '#F1C40F', '#1ABC9C', '#9B59B6'];
-                const numPillars = 120; // Increased density for better parallax
-                
+                const numPillars = 50; // Reduced for performance
+        
                 for (let i = 0; i < numPillars; i++) {
                     let box = document.createElement('a-box');
+                    let x = (Math.random() - 0.5) * 80;
+                    let z = (Math.random() - 0.5) * 80;
+                    if (Math.abs(x) < 4 && Math.abs(z) < 4) continue; // keep spawn clear
                     
-                    // Spread across a 100x100m arena
-                    let x = (Math.random() - 0.5) * 100;
-                    let z = (Math.random() - 0.5) * 100;
-                    
-                    // Keep the absolute center (spawn point) clear of obstacles
-                    if (Math.abs(x) < 5 && Math.abs(z) < 5) continue;
-                    
-                    let h = Math.random() * 8 + 1.0; 
+                    let h = Math.random() * 6 + 1.5;
                     let color = colors[Math.floor(Math.random() * colors.length)];
                     
-                    box.setAttribute('position', { x: x, y: h / 2, z: z });
+                    box.setAttribute('position', { x: x, y: h/2, z: z });
                     box.setAttribute('height', h);
-                    box.setAttribute('width', Math.random() * 1.5 + 0.5);
-                    box.setAttribute('depth', Math.random() * 1.5 + 0.5);
+                    box.setAttribute('width', Math.random() * 1.2 + 0.4);
+                    box.setAttribute('depth', Math.random() * 1.2 + 0.4);
                     box.setAttribute('color', color);
                     box.setAttribute('shadow', 'cast: true; receive: true');
                     
@@ -44,29 +42,27 @@
             }
         });
 
-        /**
-         * 2. OPTIC FLOW DUST
-         * A classic VR comfort technique. Infinite particles that wrap around the player.
-         * Gives a sensation of speed and grounds the vestibular system.
-         */
+        // =============================================
+        // 2. OPTIC FLOW DUST (softer, no white haze)
+        // =============================================
         AFRAME.registerComponent('optic-flow-dust', {
             init: function() {
-                this.count = 600;
-                this.range = 20; // A 20m bounding box of dust that travels with the rig
+                this.count = 200;                // Fewer particles
+                this.range = 20;
                 const geometry = new THREE.BufferGeometry();
                 const positions = new Float32Array(this.count * 3);
                 
                 for(let i = 0; i < this.count * 3; i++) {
                     positions[i] = (Math.random() - 0.5) * this.range;
                 }
-                
                 geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                
                 const material = new THREE.PointsMaterial({
-                    color: 0xffffff, 
-                    size: 0.05, 
-                    transparent: true, 
-                    opacity: 0.5,
-                    blending: THREE.AdditiveBlending // Makes dust glow slightly
+                    color: 0xaaccff,
+                    size: 0.08,
+                    transparent: true,
+                    opacity: 0.3,
+                    blending: THREE.NormalBlending   // No more additive white-out
                 });
                 
                 this.points = new THREE.Points(geometry, material);
@@ -74,8 +70,6 @@
             },
             
             tick: function() {
-                // To keep dust infinite, we teleport particles that fall behind the player
-                // back to the front, creating an endless treadmill effect.
                 const rigPos = document.querySelector('#rig').object3D.position;
                 const positions = this.points.geometry.attributes.position.array;
                 
@@ -84,7 +78,6 @@
                     let dy = positions[i*3+1] - rigPos.y;
                     let dz = positions[i*3+2] - rigPos.z;
                     
-                    // Wrap X, Y, and Z axes
                     if (dx > this.range/2) positions[i*3] -= this.range;
                     if (dx < -this.range/2) positions[i*3] += this.range;
                     if (dy > this.range/2) positions[i*3+1] -= this.range;
@@ -96,60 +89,57 @@
             }
         });
 
-        /**
-         * 3. COMPREHENSIVE HAND LOCOMOTION ENGINE
-         * The core system. Handles state, WebXR event routing, matrix math for spaces,
-         * momentum physics, elastic tethers, and emergency braking.
-         */
+        // ===============================================================
+        // 3. HAND LOCOMOTION (fixed: correct events, world anchor, tether)
+        // ===============================================================
         AFRAME.registerComponent('hand-locomotion', {
             schema: {
-                acceleration: { type: 'number', default: 45.0 }, // Thrust multiplier
-                maxSpeed: { type: 'number', default: 12.0 },     // Hard cap on velocity (m/s)
-                damping: { type: 'number', default: 0.90 },      // Glide friction (1 = none, 0 = instant stop)
-                deadzone: { type: 'number', default: 0.04 },     // Meters of pull required before moving (ignores jitters)
-                worldLimit: { type: 'number', default: 48.0 }    // Invisible walls to keep player on grid
+                acceleration: { default: 40.0 },
+                maxSpeed: { default: 10.0 },
+                damping: { default: 0.92 },
+                deadzone: { default: 0.05 },
+                worldLimit: { default: 45.0 }
             },
 
             init: function () {
-                // --- State Machine ---
-                this.activeHand = null;         // The hand driving the rig
+                // State
+                this.activeHand = null;
                 this.isPinching = false;
-                this.brakeEngaged = false;      // True if secondary hand pinches
+                this.brakeEngaged = false;
                 
-                // --- Physics Vectors ---
-                this.startPinchLocal = new THREE.Vector3(); // The Anchor
-                this.latestPinchWorld = null;               // The Hand
-                this.velocity = new THREE.Vector3();        // Rig momentum
+                // Anchor & velocity
+                this.anchorWorld = new THREE.Vector3();   // Fixed world point where pinch started
+                this.velocity = new THREE.Vector3();
                 
-                // --- UI Elements ---
+                // UI references
                 this.indicator = document.querySelector('#grab-indicator');
                 this.debugText = document.querySelector('#dashboard-text');
+                this.tether = document.querySelector('#tether');  // visual cylinder
 
-                // Bind events to this component scope
+                // Bind events
                 this.onPinchStart = this.onPinchStart.bind(this);
                 this.onPinchMove = this.onPinchMove.bind(this);
                 this.onPinchEnd = this.onPinchEnd.bind(this);
             },
 
             play: function () {
-                // Attach to hands dynamically. WebXR might initialize hands AFTER play() fires.
-                const attachEvents = (hand) => {
-                    hand.addEventListener('pinchstarted', this.onPinchStart);
-                    hand.addEventListener('pinchmoved', this.onPinchMove);
-                    hand.addEventListener('pinchended', this.onPinchEnd);
-                };
+                // Attach to existing hands
+                document.querySelectorAll('[hand-tracking-controls]').forEach(h => {
+                    h.addEventListener('pinchstart', this.onPinchStart);
+                    h.addEventListener('pinchmove', this.onPinchMove);
+                    h.addEventListener('pinchend', this.onPinchEnd);
+                });
 
-                // Catch hands already in the DOM
-                document.querySelectorAll('[hand-tracking-controls]').forEach(attachEvents);
-
-                // Catch hands injected later by the WebXR API
+                // Watch for dynamically added hands
                 this.el.sceneEl.addEventListener('child-attached', (evt) => {
                     if (evt.detail.el.hasAttribute('hand-tracking-controls')) {
-                        attachEvents(evt.detail.el);
+                        evt.detail.el.addEventListener('pinchstart', this.onPinchStart);
+                        evt.detail.el.addEventListener('pinchmove', this.onPinchMove);
+                        evt.detail.el.addEventListener('pinchend', this.onPinchEnd);
                     }
                 });
-                
-                this.updateDashboard('SYSTEM ONLINE\nPinch to drive. Pinch both to brake.', '#00FFaa');
+
+                this.updateDashboard('READY – Pinch to drive', '#66FCF1');
             },
 
             updateDashboard: function(text, color) {
@@ -160,227 +150,228 @@
             },
 
             onPinchStart: function (evt) {
-                // EMERGENCY BRAKE: If a hand is already driving, and the OTHER hand pinches -> BRAKE.
+                // Emergency brake: if already driving and other hand pinches
                 if (this.isPinching && this.activeHand !== evt.target) {
                     this.brakeEngaged = true;
-                    this.velocity.set(0, 0, 0); // Kill all momentum immediately
-                    this.updateDashboard('EMERGENCY BRAKE!', '#FF0000');
+                    this.velocity.set(0, 0, 0);
+                    this.updateDashboard('BRAKE!', '#FF5555');
                     return;
                 }
 
-                // Normal Drive Start
-                if (this.isPinching) return; 
+                // Ignore if already driving with same hand
+                if (this.isPinching) return;
+
+                // Start driving with this hand
                 this.activeHand = evt.target;
                 this.isPinching = true;
                 this.brakeEngaged = false;
-                
-                // 1. Capture exact fingertip world coordinates from WebXR API
-                this.latestPinchWorld = evt.detail.position.clone();
-                
-                // 2. MATRIX MATH: Convert World -> Local
-                // We MUST update the world matrix first to ensure we aren't using last frame's stale data.
-                // We convert the world pinch to Rig-Local space. This anchors the starting point to the player's body.
-                // If we didn't do this, the anchor would stay behind in the world as the player moves forward!
-                this.el.object3D.updateMatrixWorld(true);
-                this.startPinchLocal.copy(this.el.object3D.worldToLocal(this.latestPinchWorld.clone()));
 
-                // 3. Setup UI Visuals
+                // Store world anchor (the exact pinch point)
+                if (evt.detail.position) {
+                    this.anchorWorld.copy(evt.detail.position);
+                } else {
+                    // Fallback: use hand's world position
+                    const handPos = new THREE.Vector3();
+                    evt.target.object3D.getWorldPosition(handPos);
+                    this.anchorWorld.copy(handPos);
+                }
+
+                // Show anchor indicator (in local space)
                 if (this.indicator) {
                     this.indicator.setAttribute('visible', 'true');
-                    this.indicator.object3D.position.copy(this.startPinchLocal); 
+                    const localAnchor = this.el.object3D.worldToLocal(this.anchorWorld.clone());
+                    this.indicator.object3D.position.copy(localAnchor);
                 }
-                
-                // Initialize the visual tether line
-                this.el.setAttribute('line', {
-                    start: this.startPinchLocal,
-                    end: this.startPinchLocal,
-                    color: '#00FF00',
-                    opacity: 0.8
-                });
+
+                // Make tether visible and set its start point
+                if (this.tether) {
+                    this.tether.setAttribute('visible', 'true');
+                }
+
+                this.updateDashboard('DRIVE', '#00FFAA');
             },
 
             onPinchMove: function (evt) {
-                // We only care about the hand actively driving
-                if (this.activeHand !== evt.target) return;
-                
-                if (evt.detail.position) {
-                    this.latestPinchWorld = evt.detail.position.clone();
-                }
+                if (this.activeHand !== evt.target || this.brakeEngaged) return;
+                // We just need to know that the hand moved; actual position is read in tick()
+                // Could store latest hand world if needed, but we'll read directly in tick
             },
 
             onPinchEnd: function (evt) {
-                // If the braking hand is released, just lift the brake lock
+                // Release brake if it was the braking hand
                 if (this.brakeEngaged && this.activeHand !== evt.target) {
                     this.brakeEngaged = false;
                     return;
                 }
 
-                // If the driving hand is released, enter Glide phase
+                // Stop driving if it was the driving hand
                 if (this.activeHand === evt.target) {
                     this.isPinching = false;
                     this.activeHand = null;
-                    this.latestPinchWorld = null;
                     this.brakeEngaged = false;
 
-                    // Clean up UI
+                    // Hide visuals
                     if (this.indicator) this.indicator.setAttribute('visible', 'false');
-                    this.el.removeAttribute('line'); // Remove tether
-                    this.updateDashboard('GLIDING...', '#FFD700');
+                    if (this.tether) this.tether.setAttribute('visible', 'false');
+
+                    this.updateDashboard('GLIDE', '#FFD700');
                 }
             },
-            
-            tick: function (time, timeDelta) {
-                // Normalize delta time to seconds (usually ~0.011s for 90hz)
-                let dt = timeDelta / 1000;
-                // Cap delta time to prevent physics explosions if the headset freezes temporarily
-                if (dt > 0.1) dt = 0.1; 
 
-                // --- 1. DRIVING PHASE ---
-                if (this.isPinching && this.latestPinchWorld && !this.brakeEngaged) {
-                    
-                    // Convert hand's current world position to Rig-Local space
-                    this.el.object3D.updateMatrixWorld(true);
-                    let currentPinchLocal = this.el.object3D.worldToLocal(this.latestPinchWorld.clone());
+            tick: function (time, delta) {
+                let dt = Math.min(delta / 1000, 0.1); // seconds, capped
 
-                    // Calculate the JoyStick Vector (from Anchor to Hand)
-                    let pullOffset = new THREE.Vector3().subVectors(currentPinchLocal, this.startPinchLocal);
-                    let pullDistance = pullOffset.length();
+                // ---- DRIVING PHASE ----
+                if (this.isPinching && this.activeHand && !this.brakeEngaged) {
+                    // Get current hand world position
+                    const handWorld = new THREE.Vector3();
+                    // Prefer event data if available (more accurate), otherwise fallback to object position
+                    // For simplicity we always get world position from the hand entity
+                    this.activeHand.object3D.getWorldPosition(handWorld);
 
-                    // Process Deadzone & Acceleration
-                    if (pullDistance < this.data.deadzone) {
-                        // Hand is inside the deadzone (no thrust applied)
-                        pullOffset.set(0, 0, 0);
-                        this.updateDashboard(`Speed: ${this.velocity.length().toFixed(1)} m/s`, '#FFF');
-                        
-                        // Update Tether to look neutral
-                        this.el.setAttribute('line', { end: currentPinchLocal, color: '#FFFFFF' });
-                    } else {
-                        // Subtract deadzone so acceleration starts smoothly at 0
-                        pullOffset.setLength(pullDistance - this.data.deadzone);
-                        
-                        // INVERT VECTOR: Pulling back pushes rig forward
-                        pullOffset.multiplyScalar(-1);
+                    // Compute world pull vector = hand - anchor
+                    const pullWorld = new THREE.Vector3().subVectors(handWorld, this.anchorWorld);
+                    const pullDist = pullWorld.length();
 
-                        // Apply thrust (F = ma) scaled by delta time
-                        let thrust = pullOffset.clone().multiplyScalar(this.data.acceleration * dt);
+                    if (pullDist > this.data.deadzone) {
+                        // Subtract deadzone and invert (pull away → move forward)
+                        pullWorld.setLength(pullDist - this.data.deadzone);
+                        pullWorld.multiplyScalar(-1);
+
+                        // Apply thrust (world direction)
+                        const thrust = pullWorld.clone().multiplyScalar(this.data.acceleration * dt);
                         this.velocity.add(thrust);
 
-                        // Clamp velocity to maximum speed limit
+                        // Speed limit
                         if (this.velocity.length() > this.data.maxSpeed) {
                             this.velocity.setLength(this.data.maxSpeed);
                         }
 
-                        // Update Dash
-                        let speed = this.velocity.length();
-                        this.updateDashboard(`THRUST: ${speed.toFixed(1)} m/s`, '#00FFAA');
+                        // Update dashboard speed
+                        this.updateDashboard(`SPEED: ${this.velocity.length().toFixed(1)} m/s`, '#00FFAA');
+                    } else {
+                        // Inside deadzone – no thrust
+                        this.updateDashboard(`SPEED: ${this.velocity.length().toFixed(1)} m/s`, '#FFFFFF');
+                    }
 
-                        // Update Tether Color based on how hard they are pulling
-                        // Green -> Yellow -> Red gradient approximation
-                        let stretchRatio = Math.min((pullDistance - this.data.deadzone) / 0.3, 1.0); 
-                        let r = Math.floor(255 * stretchRatio);
-                        let g = Math.floor(255 * (1 - stretchRatio + 0.5)); // Stays high slightly longer
-                        let hexColor = "#" + ((1 << 24) + (r << 16) + (g << 8) + 0).toString(16).slice(1);
-                        
-                        this.el.setAttribute('line', { end: currentPinchLocal, color: hexColor });
+                    // Update visual tether (cylinder between anchor and hand, in local space)
+                    if (this.tether) {
+                        const localAnchor = this.el.object3D.worldToLocal(this.anchorWorld.clone());
+                        const localHand = this.el.object3D.worldToLocal(handWorld.clone());
+                        this.updateTether(localAnchor, localHand);
                     }
                 }
 
-                // --- 2. MOVEMENT & FRICTION PHASE ---
+                // ---- APPLY VELOCITY & FRICTION ----
                 if (this.velocity.lengthSq() > 0.0001) {
-                    // Apply velocity to rig position (P' = P + V*dt)
-                    let moveStep = this.velocity.clone().multiplyScalar(dt);
-                    this.el.object3D.position.add(moveStep);
-                    
-                    // Framerate-independent friction
-                    // If running at 60fps, dt*60 = 1. Applies full damping.
-                    // If running at 120fps, dt*60 = 0.5. Applies square root of damping (less per frame, equal over time).
-                    let friction = Math.pow(this.data.damping, dt * 60);
+                    // Move rig
+                    this.el.object3D.position.add(this.velocity.clone().multiplyScalar(dt));
+
+                    // Frame‑rate independent damping
+                    const friction = Math.pow(this.data.damping, dt * 60);
                     this.velocity.multiplyScalar(friction);
                 } else {
-                    // Force complete stop to prevent floating point drift
-                    this.velocity.set(0,0,0);
-                    if (!this.isPinching && this.debugText && this.debugText.getAttribute('value') === 'GLIDING...') {
-                        this.updateDashboard('SYSTEM ONLINE\nPinch to drive. Pinch both to brake.', '#00FFaa');
-                    }
+                    this.velocity.set(0, 0, 0);
                 }
 
-                // --- 3. WORLD BOUNDARIES ---
-                // Keeps player inside the designated play area
-                let pos = this.el.object3D.position;
-                let limit = this.data.worldLimit;
-                
-                // X Axis (Left/Right bounds)
+                // ---- WORLD BOUNDARIES ----
+                const pos = this.el.object3D.position;
+                const limit = this.data.worldLimit;
                 if (pos.x > limit) { pos.x = limit; this.velocity.x = 0; }
                 if (pos.x < -limit) { pos.x = -limit; this.velocity.x = 0; }
-                
-                // Z Axis (Forward/Backward bounds)
                 if (pos.z > limit) { pos.z = limit; this.velocity.z = 0; }
                 if (pos.z < -limit) { pos.z = -limit; this.velocity.z = 0; }
-                
-                // Y Axis (Height bounds). 
-                // Hard floor at Y=0 so you don't sink. Ceiling at Y=20.
                 if (pos.y < 0) { pos.y = 0; this.velocity.y = 0; }
                 if (pos.y > 20) { pos.y = 20; this.velocity.y = 0; }
+            },
+
+            // Helper to stretch a cylinder between two local points
+            updateTether: function (start, end) {
+                if (!this.tether) return;
+                const direction = new THREE.Vector3().subVectors(end, start);
+                const distance = direction.length();
+                if (distance < 0.001) return;
+
+                // Midpoint
+                const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+                this.tether.object3D.position.copy(mid);
+
+                // Orient to direction
+                this.tether.object3D.quaternion.setFromUnitVectors(
+                    new THREE.Vector3(0, 1, 0),
+                    direction.clone().normalize()
+                );
+
+                // Scale (height = distance, radius fixed)
+                this.tether.setAttribute('scale', { x: 0.01, y: distance, z: 0.01 });
             }
         });
+
+        // =================================================================
+        // ALTERNATIVE CREATIVE GESTURE: Motorcycle Rev (twist to accelerate)
+        // Replace the above component with this one if you prefer.
+        // =================================================================
+        /*
+        AFRAME.registerComponent('motorcycle-locomotion', {
+            schema: {
+                maxSpeed: { default: 12 },
+                acceleration: { default: 8 },
+                braking: { default: 15 }
+            },
+            init: function() {
+                this.speed = 0;
+                this.rightHand = null;
+                this.leftHand = null;
+                this.debug = document.querySelector('#dashboard-text');
+                // ... (full implementation available on request)
+            },
+            tick: function() { /* ... * / }
+        });
+        */
     </script>
 </head>
 <body>
-    <!-- The VR Scene. Hand-tracking explicitly requested for WebXR. -->
-    <a-scene background="color: #0b0c10" shadow="type: pcfsoft" webxr="optionalFeatures: hand-tracking, hit-test;">
+    <a-scene background="color: #11151f" shadow="type: pcfsoft" webxr="optionalFeatures: hand-tracking;">
         
-        <!-- Environment Modules -->
+        <!-- Environment -->
         <a-entity optic-flow-dust></a-entity>
         <a-entity environment-scatter></a-entity>
 
-        <!-- Start Menu / Instructions -->
-        <a-entity position="0 2.5 -4" rotation="0 0 0">
-            <a-text value="ELASTIC DRIVE LOCOMOTION" align="center" width="6" color="#66FCF1" position="0 0.5 0"></a-text>
-            <a-text value="1. Pinch your fingers to create an anchor.\n2. Pull your hand away from the anchor to accelerate.\n3. The visual tether shows your throttle power.\n4. Pinch your OTHER hand to slam the emergency brakes." align="center" width="4" color="#C5C6C7"></a-text>
+        <!-- Instructions -->
+        <a-entity position="0 2.5 -3" rotation="0 0 0">
+            <a-text value="PINCH TO MOVE" align="center" width="6" color="#66FCF1" position="0 0.5 0"></a-text>
+            <a-text value="Pinch one hand to set anchor → pull away to move forward.\nPinch the other hand to emergency brake." align="center" width="4" color="#C5C6C7"></a-text>
         </a-entity>
 
-        <!-- Lighting for depth and shadows -->
-        <a-light type="ambient" color="#404040"></a-light>
-        <a-light type="directional" position="5 10 -5" intensity="1.2" shadow="cast: true; shadowMapHeight: 2048; shadowMapWidth: 2048; shadowCameraNear: -10;"></a-light>
-        <a-light type="point" position="0 3 0" intensity="0.5" color="#66FCF1"></a-light>
+        <!-- Lighting -->
+        <a-light type="ambient" color="#303030"></a-light>
+        <a-light type="directional" position="5 10 5" intensity="1.0" shadow="cast: true"></a-light>
+        <a-light type="point" position="0 3 0" intensity="0.6" color="#66FCF1"></a-light>
 
-        <!-- Infinite Floor Grid -->
-        <a-plane 
-            position="0 0 0" 
-            rotation="-90 0 0" 
-            width="200" 
-            height="200" 
-            material="src: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%231f2833'/%3E%3Cpath d='M200 0 L0 0 0 200' fill='none' stroke='%2345a29e' stroke-width='1' opacity='0.3'/%3E%3C/svg%3E); repeat: 200 200; roughness: 0.8; metalness: 0.2;" 
-            shadow="receive: true">
-        </a-plane>
+        <!-- Ground grid (clean) -->
+        <a-grid material="color: #2a3a4a; opacity: 0.3" position="0 0 0" rotation="-90 0 0" width="200" height="200"></a-grid>
 
-        <!-- 
-          === PLAYER RIG ===
-          The hand-locomotion script is attached here. 
-          The Rig acts as the physical 'body', carrying the camera (eyes) and hands with it.
-        -->
-        <a-entity id="rig" hand-locomotion="acceleration: 45.0; maxSpeed: 12.0; damping: 0.90; deadzone: 0.04;">
+        <!-- Player Rig -->
+        <a-entity id="rig" hand-locomotion="acceleration: 40; maxSpeed: 10; damping: 0.92; deadzone: 0.05;">
             
-            <!-- Camera (Head) -->
+            <!-- Camera with dashboard -->
             <a-camera position="0 1.6 0">
-                <!-- Dashboard UI locked to the user's view -->
-                <a-entity position="0 -0.4 -0.8">
-                    <a-plane width="0.8" height="0.2" color="#0b0c10" opacity="0.8" border-radius="0.05"></a-plane>
-                    <a-text id="dashboard-text" value="Loading Systems..." position="0 0 0.01" align="center" width="1.2" color="#66FCF1"></a-text>
+                <a-entity position="0 -0.3 -0.8">
+                    <a-plane width="0.9" height="0.2" color="#0b0c10" opacity="0.8" material="shader: flat;"></a-plane>
+                    <a-text id="dashboard-text" value="Starting..." position="0 0 0.01" align="center" width="1.4" color="#66FCF1"></a-text>
                 </a-entity>
             </a-camera>
 
-            <!-- 
-              Visual Anchor Indicator.
-              Must be placed inside the Rig so it maintains its local spatial relationship 
-              to the player's body when the rig moves.
-            -->
-            <a-sphere id="grab-indicator" radius="0.025" color="#66FCF1" opacity="0.9" visible="false" material="shader: flat;"></a-sphere>
-            
-            <!-- Hand Controllers configured specifically for Quest hand tracking -->
+            <!-- Visual anchor indicator (small sphere) -->
+            <a-sphere id="grab-indicator" radius="0.025" color="#66FCF1" visible="false" material="emissive: #66FCF1"></a-sphere>
+
+            <!-- Visual tether (thin cylinder) -->
+            <a-cylinder id="tether" radius="0.005" height="1" color="#FFAA33" visible="false" material="emissive: #FFAA33"></a-cylinder>
+
+            <!-- Hands (dot style is lightweight) -->
             <a-entity id="leftHand" hand-tracking-controls="hand: left; modelStyle: dots; modelColor: #45a29e;"></a-entity>
             <a-entity id="rightHand" hand-tracking-controls="hand: right; modelStyle: dots; modelColor: #45a29e;"></a-entity>
-            
+
         </a-entity>
 
     </a-scene>
