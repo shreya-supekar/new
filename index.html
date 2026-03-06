@@ -80,10 +80,10 @@
         });
 
         /**
-         * 3. 1:1 DIRECT DRAG LOCOMOTION (Merged from user code)
-         * - Uses direct frame-by-frame delta calculation.
-         * - Locks Y axis (delta.y = 0) for horizontal plane movement.
-         * - Replaces momentum/joystick with instant stopping.
+         * 3. 1:1 DIRECT DRAG LOCOMOTION (Fully Debugged & Event Driven)
+         * - Avoids 'object3D.position' (which stays at 0,0,0 in WebXR)
+         * - Uses real-time 'pinchmoved' coordinates.
+         * - Locks Y axis for horizontal plane movement.
          */
         AFRAME.registerComponent('hand-locomotion', {
             schema: {
@@ -95,18 +95,21 @@
                 this.activeHand = null;
                 this.isPinching = false;
                 
-                // Track previous local position to calculate delta
-                this.prevHandLocalPos = new THREE.Vector3(); 
+                // Track anchors to eliminate WebXR feedback loops
+                this.anchorRigWorld = new THREE.Vector3(); 
+                this.anchorPinchLocal = new THREE.Vector3();
                 
                 this.debugText = document.querySelector('#dashboard-text');
 
                 this.onPinchStart = this.onPinchStart.bind(this);
+                this.onPinchMove = this.onPinchMove.bind(this);
                 this.onPinchEnd = this.onPinchEnd.bind(this);
             },
 
             play: function () {
                 const attachEvents = (hand) => {
                     hand.addEventListener('pinchstarted', this.onPinchStart);
+                    hand.addEventListener('pinchmoved', this.onPinchMove); // CRITICAL: Listen for updates
                     hand.addEventListener('pinchended', this.onPinchEnd);
                 };
 
@@ -129,48 +132,54 @@
             },
 
             onPinchStart: function (evt) {
-                // Prevent grabbing with a second hand if already driving
                 if (this.isPinching) return; 
                 
                 this.activeHand = evt.target;
                 this.isPinching = true;
                 
-                // Store the starting local position of the hand
-                this.prevHandLocalPos.copy(this.activeHand.object3D.position);
+                // 1. Save the rig's exact starting world position
+                this.anchorRigWorld.copy(this.el.object3D.position);
+                
+                // 2. Extract the actual WebXR world coordinate of the fingertip
+                let pinchWorld = evt.detail.position;
+                if (pinchWorld) {
+                    // 3. Convert world coordinate to local physical room coordinate
+                    this.el.object3D.updateMatrixWorld(true);
+                    this.anchorPinchLocal.copy(this.el.object3D.worldToLocal(pinchWorld.clone()));
+                }
                 
                 this.updateDashboard('ACTION: GRABBING & PULLING', '#00FFAA');
             },
 
-            onPinchEnd: function (evt) {
-                // Release grab only if it's the active hand
-                if (this.activeHand === evt.target) {
-                    this.isPinching = false;
-                    this.activeHand = null;
-                    
-                    this.updateDashboard('SYSTEM IDLE\nPinch and pull the air to move.', '#FFFFFF');
-                }
-            },
-            
-            tick: function () {
-                if (this.isPinching && this.activeHand) {
-                    const rigPos = this.el.object3D.position;
-                    const currentHandPos = this.activeHand.object3D.position;
-                    
-                    // 1. Calculate hand movement delta since last frame
-                    const delta = new THREE.Vector3().subVectors(currentHandPos, this.prevHandLocalPos);
-                    
-                    // 2. We only want horizontal movement (ignore Y axis)
-                    delta.y = 0; 
-                    
-                    // 3. Apply inverse movement to rig (pulling hand back moves player forward)
-                    rigPos.addScaledVector(delta, -this.data.multiplier);
-                    
-                    // 4. Update previous position for the next frame's calculation
-                    this.prevHandLocalPos.copy(currentHandPos);
-                }
+            onPinchMove: function (evt) {
+                // Must be the actively driving hand
+                if (!this.isPinching || this.activeHand !== evt.target) return;
+
+                let pinchWorld = evt.detail.position;
+                if (!pinchWorld) return;
+
+                // --- FOOLPROOF GORILLA MATH ---
+                // To prevent infinite feedback loops, we calculate the hand's physical 
+                // room movement relative to the original anchor point, NOT the current frame.
+                
+                // 1. Temporarily revert rig to anchor to calculate raw room offset
+                this.el.object3D.position.copy(this.anchorRigWorld);
+                this.el.object3D.updateMatrixWorld(true);
+
+                // 2. Get current hand position in physical room space
+                let currentPinchLocal = this.el.object3D.worldToLocal(pinchWorld.clone());
+
+                // 3. Calculate distance pulled since grab started
+                let delta = new THREE.Vector3().subVectors(currentPinchLocal, this.anchorPinchLocal);
+                
+                // 4. Lock to horizontal plane (don't pull yourself into the floor)
+                delta.y = 0; 
+                
+                // 5. Move rig opposite to pull direction
+                this.el.object3D.position.copy(this.anchorRigWorld).addScaledVector(delta, -this.data.multiplier);
 
                 // --- WORLD BOUNDARIES ---
-                // Keeps player inside the designated play area even when dragging
+                // Clamp limits immediately inside the move event
                 let pos = this.el.object3D.position;
                 let limit = this.data.worldLimit;
                 
@@ -178,9 +187,16 @@
                 if (pos.x < -limit) pos.x = -limit;
                 if (pos.z > limit) pos.z = limit;
                 if (pos.z < -limit) pos.z = -limit;
-                
-                // Hard floor lock at Y=0 (since delta.y = 0, this just ensures spawn safety)
                 if (pos.y < 0) pos.y = 0;
+            },
+
+            onPinchEnd: function (evt) {
+                if (this.activeHand === evt.target) {
+                    this.isPinching = false;
+                    this.activeHand = null;
+                    
+                    this.updateDashboard('SYSTEM IDLE\nPinch and pull the air to move.', '#FFFFFF');
+                }
             }
         });
     </script>
