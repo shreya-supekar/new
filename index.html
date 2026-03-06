@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Gesture Locomotion Template</title>
+    
+    <!-- A-Frame 1.5.0 library -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+
+    <script>
+        // ---------------------------------------------------------
+        // 1. Environment Scatter Component
+        // Generates random pillars to give you a sense of scale, 
+        // depth, and movement speed in the plain world.
+        // ---------------------------------------------------------
+        AFRAME.registerComponent('environment-scatter', {
+            init: function () {
+                const colors = ['#4CC3D9', '#EF2D5E', '#FFC65D', '#7BC8A4', '#9B59B6'];
+                const numPillars = 80;
+                
+                for (let i = 0; i < numPillars; i++) {
+                    let box = document.createElement('a-box');
+                    
+                    // Random positions between -30 and 30 meters
+                    let x = (Math.random() - 0.5) * 60;
+                    let z = (Math.random() - 0.5) * 60;
+                    
+                    // Keep the central spawn area clear so you don't spawn inside a box
+                    if (Math.abs(x) < 3 && Math.abs(z) < 3) continue;
+                    
+                    let h = Math.random() * 4 + 0.5; // Random height between 0.5m and 4.5m
+                    let color = colors[Math.floor(Math.random() * colors.length)];
+                    
+                    box.setAttribute('position', { x: x, y: h / 2, z: z });
+                    box.setAttribute('height', h);
+                    box.setAttribute('width', 0.6);
+                    box.setAttribute('depth', 0.6);
+                    box.setAttribute('color', color);
+                    box.setAttribute('shadow', 'cast: true; receive: true');
+                    
+                    this.el.appendChild(box);
+                }
+            }
+        });
+
+        // ---------------------------------------------------------
+        // 2. Hand Locomotion Component (The Core Mechanic)
+        // Tracks the "pinch" gesture to pull the world around you.
+        // ---------------------------------------------------------
+        AFRAME.registerComponent('hand-locomotion', {
+            schema: {
+                leftHand: { type: 'selector', default: '#leftHand' },
+                rightHand: { type: 'selector', default: '#rightHand' },
+                speed: { type: 'number', default: 1.5 }, // > 1 makes you travel further per physical movement
+                indicator: { type: 'selector', default: '#grab-indicator' }
+            },
+
+            init: function () {
+                this.activeHand = null;
+                this.startLocalHandPosition = new THREE.Vector3();
+                this.startRigWorldPosition = new THREE.Vector3();
+                this.currentLocalHandPosition = new THREE.Vector3();
+
+                // Bind context to methods to keep scope intact
+                this.onPinchStart = this.onPinchStart.bind(this);
+                this.onPinchEnd = this.onPinchEnd.bind(this);
+
+                // Attach pinch event listeners to the left hand
+                if (this.data.leftHand) {
+                    this.data.leftHand.addEventListener('pinchstarted', () => this.onPinchStart(this.data.leftHand));
+                    this.data.leftHand.addEventListener('pinchended', () => this.onPinchEnd(this.data.leftHand));
+                }
+
+                // Attach pinch event listeners to the right hand
+                if (this.data.rightHand) {
+                    this.data.rightHand.addEventListener('pinchstarted', () => this.onPinchStart(this.data.rightHand));
+                    this.data.rightHand.addEventListener('pinchended', () => this.onPinchEnd(this.data.rightHand));
+                }
+            },
+
+            onPinchStart: function (handEl) {
+                // If we are already dragging with one hand, ignore the second hand
+                if (this.activeHand) return; 
+                this.activeHand = handEl;
+
+                // 1. Save the local hand position relative to the VR physical play space
+                this.startLocalHandPosition.copy(handEl.object3D.position);
+
+                // 2. Save the VR Rig's current world position
+                this.startRigWorldPosition.copy(this.el.object3D.position);
+
+                // 3. Show visual grab indicator (yellow orb) locked at the grab world space
+                if (this.data.indicator) {
+                    this.data.indicator.setAttribute('visible', 'true');
+                    const worldPos = new THREE.Vector3();
+                    handEl.object3D.getWorldPosition(worldPos);
+                    this.data.indicator.object3D.position.copy(worldPos);
+                }
+            },
+
+            onPinchEnd: function (handEl) {
+                // Release the grab only if the hand that ended the pinch is the currently active one
+                if (this.activeHand === handEl) {
+                    this.activeHand = null;
+                    if (this.data.indicator) {
+                        this.data.indicator.setAttribute('visible', 'false');
+                    }
+                }
+            },
+
+            tick: function () {
+                // If we aren't currently pinching, do nothing
+                if (!this.activeHand) return;
+
+                // FOOLPROOF CHECK: If tracking is lost while grabbing, forcefully release the grip
+                if (!this.activeHand.object3D.visible) {
+                    this.onPinchEnd(this.activeHand);
+                    return;
+                }
+
+                // Get current local hand position
+                this.currentLocalHandPosition.copy(this.activeHand.object3D.position);
+
+                // Calculate the physical movement delta: Current position minus starting position
+                const delta = new THREE.Vector3();
+                delta.subVectors(this.currentLocalHandPosition, this.startLocalHandPosition);
+
+                // Apply speed multiplier and INVERT it. 
+                // Why invert? Moving your hand forward should push the world backward (moving you forward).
+                delta.multiplyScalar(-this.data.speed);
+
+                // Update Rig's world position: Starting world position + movement delta
+                this.el.object3D.position.addVectors(this.startRigWorldPosition, delta);
+            }
+        });
+    </script>
+</head>
+<body>
+    <!-- The VR Scene -->
+    <a-scene background="color: #1a1a1a" shadow="type: pcfsoft">
+        
+        <!-- Generated scatter environment (pillars) -->
+        <a-entity environment-scatter></a-entity>
+
+        <!-- Instructions Panel text for the user -->
+        <a-entity position="0 1.8 -3" rotation="0 0 0">
+            <a-text value="VR Locomotion Template\n\nPinch your thumb and index finger\ntogether, then drag to pull the world." align="center" width="4" color="#FFF"></a-text>
+        </a-entity>
+
+        <!-- Visual Grab Indicator (Appears precisely where you pinch) -->
+        <a-sphere id="grab-indicator" radius="0.04" color="#FFD700" opacity="0.6" visible="false" shadow="cast: false"></a-sphere>
+
+        <!-- Basic Lighting -->
+        <a-light type="ambient" color="#666"></a-light>
+        <a-light type="directional" position="2 5 3" intensity="0.8" shadow="cast: true"></a-light>
+
+        <!-- Plain Floor Plane with an infinite SVG Grid Texture -->
+        <a-plane 
+            position="0 0 0" 
+            rotation="-90 0 0" 
+            width="100" 
+            height="100" 
+            material="src: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100' height='100' fill='%232a2a2a'/%3E%3Cpath d='M100 0 L0 0 0 100' fill='none' stroke='%234a4a4a' stroke-width='2'/%3E%3C/svg%3E); repeat: 100 100" 
+            shadow="receive: true">
+        </a-plane>
+
+        <!-- 
+          PLAYER RIG 
+          Attach the `hand-locomotion` component here. 
+          You can tweak the 'speed' property depending on how fast you want the user to travel.
+        -->
+        <a-entity id="rig" hand-locomotion="speed: 1.5">
+            
+            <!-- Player Camera -->
+            <a-camera position="0 1.6 0"></a-camera>
+            
+            <!-- Left Hand Tracking -->
+            <a-entity 
+                id="leftHand" 
+                hand-tracking-controls="hand: left; modelColor: #d1d1d1;">
+            </a-entity>
+            
+            <!-- Right Hand Tracking -->
+            <a-entity 
+                id="rightHand" 
+                hand-tracking-controls="hand: right; modelColor: #d1d1d1;">
+            </a-entity>
+            
+        </a-entity>
+
+    </a-scene>
+</body>
+</html>
