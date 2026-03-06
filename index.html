@@ -45,101 +45,176 @@
         });
 
         // ---------------------------------------------------------
-        // 2. Hand Locomotion Component (The Core Mechanic)
-        // Tracks the "pinch" gesture to pull the world around you.
+        // 3. Optic Flow Dust (NEW for Quest 3S Affordance)
+        // Creates infinite particles around you to provide immediate 
+        // visual feedback of your speed and direction.
+        // ---------------------------------------------------------
+        AFRAME.registerComponent('optic-flow-dust', {
+            init: function() {
+                this.count = 400;
+                this.range = 15; // 15 meter box of dust
+                const geometry = new THREE.BufferGeometry();
+                const positions = new Float32Array(this.count * 3);
+                for(let i=0; i<this.count*3; i++) {
+                    positions[i] = (Math.random() - 0.5) * this.range;
+                }
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                const material = new THREE.PointsMaterial({color: 0xffffff, size: 0.04, transparent: true, opacity: 0.6});
+                this.points = new THREE.Points(geometry, material);
+                this.el.setObject3D('mesh', this.points);
+            },
+            tick: function() {
+                const rigPos = document.querySelector('#rig').object3D.position;
+                const positions = this.points.geometry.attributes.position.array;
+                
+                for(let i=0; i<this.count; i++) {
+                    let dx = positions[i*3] - rigPos.x;
+                    let dy = positions[i*3+1] - rigPos.y;
+                    let dz = positions[i*3+2] - rigPos.z;
+                    
+                    // Wrap particles around the player to make them infinite
+                    if (dx > this.range/2) positions[i*3] -= this.range;
+                    if (dx < -this.range/2) positions[i*3] += this.range;
+                    if (dy > this.range/2) positions[i*3+1] -= this.range;
+                    if (dy < -this.range/2) positions[i*3+1] += this.range;
+                    if (dz > this.range/2) positions[i*3+2] -= this.range;
+                    if (dz < -this.range/2) positions[i*3+2] += this.range;
+                }
+                this.points.geometry.attributes.position.needsUpdate = true;
+            }
+        });
+
+        // ---------------------------------------------------------
+        // 2. Hand Locomotion Component (Optimized for Quest 3S)
+        // Tracks "pinch" gesture with momentum, easing, and local delta tracking.
         // ---------------------------------------------------------
         AFRAME.registerComponent('hand-locomotion', {
             schema: {
-                leftHand: { type: 'selector', default: '#leftHand' },
-                rightHand: { type: 'selector', default: '#rightHand' },
-                speed: { type: 'number', default: 1.5 }, // > 1 makes you travel further per physical movement
-                indicator: { type: 'selector', default: '#grab-indicator' }
+                speed: { type: 'number', default: 1.5 },
+                damping: { type: 'number', default: 0.92 } // Momentum friction
             },
 
             init: function () {
                 this.activeHand = null;
-                this.startLocalHandPosition = new THREE.Vector3();
-                this.startRigWorldPosition = new THREE.Vector3();
-                this.currentLocalHandPosition = new THREE.Vector3();
+                this.lastLocalPos = new THREE.Vector3();
+                this.velocity = new THREE.Vector3();
+                this.isPinching = false;
 
-                // Bind context to methods to keep scope intact
                 this.onPinchStart = this.onPinchStart.bind(this);
+                this.onPinchMove = this.onPinchMove.bind(this);
                 this.onPinchEnd = this.onPinchEnd.bind(this);
+            },
 
-                // Attach pinch event listeners to the left hand
-                if (this.data.leftHand) {
-                    this.data.leftHand.addEventListener('pinchstarted', () => this.onPinchStart(this.data.leftHand));
-                    this.data.leftHand.addEventListener('pinchended', () => this.onPinchEnd(this.data.leftHand));
-                }
+            play: function () {
+                const attachEvents = (hand) => {
+                    hand.addEventListener('pinchstarted', this.onPinchStart);
+                    hand.addEventListener('pinchmoved', this.onPinchMove);
+                    hand.addEventListener('pinchended', this.onPinchEnd);
+                };
 
-                // Attach pinch event listeners to the right hand
-                if (this.data.rightHand) {
-                    this.data.rightHand.addEventListener('pinchstarted', () => this.onPinchStart(this.data.rightHand));
-                    this.data.rightHand.addEventListener('pinchended', () => this.onPinchEnd(this.data.rightHand));
+                const hands = document.querySelectorAll('[hand-tracking-controls]');
+                hands.forEach(attachEvents);
+
+                this.el.sceneEl.addEventListener('child-attached', (evt) => {
+                    if (evt.detail.el.hasAttribute('hand-tracking-controls')) {
+                        attachEvents(evt.detail.el);
+                    }
+                });
+                
+                const debug = document.querySelector('#debug-text');
+                if(debug) debug.setAttribute('value', 'Quest 3S Optimized.\nPinch & drag to move!');
+            },
+
+            onPinchStart: function (evt) {
+                if (this.isPinching) return;
+                this.activeHand = evt.target;
+                this.isPinching = true;
+                this.velocity.set(0, 0, 0); // Stop momentum when grabbing
+                
+                const debug = document.querySelector('#debug-text');
+                if(debug) debug.setAttribute('value', 'Grabbing Space...');
+
+                // Convert exact world pinch pos to local space to avoid feedback loops
+                this.el.object3D.updateMatrixWorld(true);
+                this.lastLocalPos = this.el.object3D.worldToLocal(evt.detail.position.clone());
+
+                const indicator = document.querySelector('#grab-indicator');
+                if (indicator) {
+                    indicator.setAttribute('visible', 'true');
+                    indicator.object3D.position.copy(evt.detail.position);
                 }
             },
 
-            onPinchStart: function (handEl) {
-                // If we are already dragging with one hand, ignore the second hand
-                if (this.activeHand) return; 
-                this.activeHand = handEl;
+            onPinchMove: function (evt) {
+                if (this.activeHand !== evt.target) return;
 
-                // 1. Save the local hand position relative to the VR physical play space
-                this.startLocalHandPosition.copy(handEl.object3D.position);
+                let worldPos = evt.detail.position;
+                if (!worldPos) return;
 
-                // 2. Save the VR Rig's current world position
-                this.startRigWorldPosition.copy(this.el.object3D.position);
+                // Update visual orb
+                const indicator = document.querySelector('#grab-indicator');
+                if (indicator) indicator.object3D.position.copy(worldPos);
 
-                // 3. Show visual grab indicator (yellow orb) locked at the grab world space
-                if (this.data.indicator) {
-                    this.data.indicator.setAttribute('visible', 'true');
-                    const worldPos = new THREE.Vector3();
-                    handEl.object3D.getWorldPosition(worldPos);
-                    this.data.indicator.object3D.position.copy(worldPos);
-                }
+                // 1. Get current local pinch position
+                this.el.object3D.updateMatrixWorld(true);
+                let currentLocalPos = this.el.object3D.worldToLocal(worldPos.clone());
+
+                // 2. Calculate true physical delta
+                let delta = new THREE.Vector3().subVectors(currentLocalPos, this.lastLocalPos);
+
+                // 3. Apply movement
+                let moveVector = delta.clone().multiplyScalar(-this.data.speed);
+                this.el.object3D.position.add(moveVector);
+
+                // 4. Record velocity for momentum glide (scaled roughly for 60-90hz)
+                this.velocity.copy(moveVector).multiplyScalar(70);
+
+                // 5. Update last local pos
+                this.lastLocalPos.copy(currentLocalPos);
             },
 
-            onPinchEnd: function (handEl) {
-                // Release the grab only if the hand that ended the pinch is the currently active one
-                if (this.activeHand === handEl) {
+            onPinchEnd: function (evt) {
+                if (this.activeHand === evt.target) {
+                    this.isPinching = false;
                     this.activeHand = null;
-                    if (this.data.indicator) {
-                        this.data.indicator.setAttribute('visible', 'false');
+                    
+                    const debug = document.querySelector('#debug-text');
+                    if(debug) debug.setAttribute('value', 'Gliding...');
+
+                    const indicator = document.querySelector('#grab-indicator');
+                    if (indicator) indicator.setAttribute('visible', 'false');
+                }
+            },
+            
+            tick: function (time, timeDelta) {
+                // Apply Momentum / Glide when not actively pinching
+                if (!this.isPinching && this.velocity.lengthSq() > 0.0001) {
+                    let dt = timeDelta / 1000;
+                    let step = this.velocity.clone().multiplyScalar(dt);
+                    this.el.object3D.position.add(step);
+                    
+                    // Apply friction (damping)
+                    this.velocity.multiplyScalar(this.data.damping);
+                    
+                    // Stop text when fully stopped
+                    if(this.velocity.lengthSq() < 0.001) {
+                        const debug = document.querySelector('#debug-text');
+                        if(debug && debug.getAttribute('value') === 'Gliding...') {
+                            debug.setAttribute('value', 'System Ready.');
+                        }
                     }
                 }
-            },
-
-            tick: function () {
-                // If we aren't currently pinching, do nothing
-                if (!this.activeHand) return;
-
-                // FOOLPROOF CHECK: If tracking is lost while grabbing, forcefully release the grip
-                if (!this.activeHand.object3D.visible) {
-                    this.onPinchEnd(this.activeHand);
-                    return;
-                }
-
-                // Get current local hand position
-                this.currentLocalHandPosition.copy(this.activeHand.object3D.position);
-
-                // Calculate the physical movement delta: Current position minus starting position
-                const delta = new THREE.Vector3();
-                delta.subVectors(this.currentLocalHandPosition, this.startLocalHandPosition);
-
-                // Apply speed multiplier and INVERT it. 
-                // Why invert? Moving your hand forward should push the world backward (moving you forward).
-                delta.multiplyScalar(-this.data.speed);
-
-                // Update Rig's world position: Starting world position + movement delta
-                this.el.object3D.position.addVectors(this.startRigWorldPosition, delta);
             }
         });
     </script>
 </head>
 <body>
-    <!-- The VR Scene -->
-    <a-scene background="color: #1a1a1a" shadow="type: pcfsoft">
+    <!-- The VR Scene with explicit Hand Tracking requested for Meta Browser -->
+    <a-scene background="color: #1a1a1a" shadow="type: pcfsoft" webxr="optionalFeatures: hand-tracking, hit-test;">
         
+        <!-- Optic Flow Dust (Infinite floating particles) -->
+        <a-entity optic-flow-dust></a-entity>
+
         <!-- Generated scatter environment (pillars) -->
         <a-entity environment-scatter></a-entity>
 
@@ -168,12 +243,14 @@
         <!-- 
           PLAYER RIG 
           Attach the `hand-locomotion` component here. 
-          You can tweak the 'speed' property depending on how fast you want the user to travel.
         -->
         <a-entity id="rig" hand-locomotion="speed: 1.5">
             
             <!-- Player Camera -->
-            <a-camera position="0 1.6 0"></a-camera>
+            <a-camera position="0 1.6 0">
+                <!-- Debug Text Attached to Camera to give real-time feedback -->
+                <a-text id="debug-text" value="Loading Locomotion..." position="0 -0.2 -0.8" align="center" width="1.5" color="#FFD700" opacity="0.8"></a-text>
+            </a-camera>
             
             <!-- Left Hand Tracking -->
             <a-entity 
