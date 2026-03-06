@@ -3,160 +3,261 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VR Hand Gesture Locomotion Template</title>
-    <!-- Import A-Frame (v1.5.0 provides excellent WebXR Hand Tracking support) -->
+    <title>Comprehensive VR Hand Locomotion</title>
+    
+    <!-- A-Frame 1.5.0 library: The backbone of our WebXR experience -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
     <script>
         /**
-         * 1. GRAB AND PULL LOCOMOTION COMPONENT
-         * This component allows the user to 'grab' the air by pinching and 
-         * then move their hand to pull themselves through the world.
+         * 1. ENVIRONMENT SCATTER
          */
-        AFRAME.registerComponent('grab-locomotion', {
-            schema: {
-                multiplier: { type: 'number', default: 2.0 }, // Sensitivity of the pull
-                leftHand: { type: 'selector', default: '#leftHand' },
-                rightHand: { type: 'selector', default: '#rightHand' }
-            },
-
+        AFRAME.registerComponent('environment-scatter', {
             init: function () {
-                this.isLeftGrabbing = false;
-                this.isRightGrabbing = false;
+                const colors = ['#2C3E50', '#E74C3C', '#F1C40F', '#1ABC9C', '#9B59B6'];
+                const numPillars = 120; 
                 
-                // Track positions to calculate movement delta
-                this.prevLeftPos = new THREE.Vector3();
-                this.prevRightPos = new THREE.Vector3();
-                
-                this.statusText = document.querySelector('#status-text');
-
-                // Bind events for Left Hand
-                if (this.data.leftHand) {
-                    this.data.leftHand.addEventListener('pinchstarted', () => {
-                        this.isLeftGrabbing = true;
-                        this.prevLeftPos.copy(this.data.leftHand.object3D.position);
-                    });
-                    this.data.leftHand.addEventListener('pinchended', () => {
-                        this.isLeftGrabbing = false;
-                    });
-                }
-
-                // Bind events for Right Hand
-                if (this.data.rightHand) {
-                    this.data.rightHand.addEventListener('pinchstarted', () => {
-                        this.isRightGrabbing = true;
-                        this.prevRightPos.copy(this.data.rightHand.object3D.position);
-                    });
-                    this.data.rightHand.addEventListener('pinchended', () => {
-                        this.isRightGrabbing = false;
-                    });
-                }
-            },
-
-            tick: function () {
-                let moving = false;
-                const rigPos = this.el.object3D.position;
-
-                // Process Left Hand Movement
-                if (this.isLeftGrabbing && this.data.leftHand) {
-                    const currentPos = this.data.leftHand.object3D.position;
-                    const delta = new THREE.Vector3().subVectors(currentPos, this.prevLeftPos);
+                for (let i = 0; i < numPillars; i++) {
+                    let box = document.createElement('a-box');
+                    let x = (Math.random() - 0.5) * 100;
+                    let z = (Math.random() - 0.5) * 100;
                     
-                    // We only want horizontal movement (X and Z)
-                    delta.y = 0; 
+                    if (Math.abs(x) < 5 && Math.abs(z) < 5) continue;
                     
-                    // Apply inverse movement to rig (pulling hand back moves player forward)
-                    rigPos.addScaledVector(delta, -this.data.multiplier);
+                    let h = Math.random() * 8 + 1.0; 
+                    let color = colors[Math.floor(Math.random() * colors.length)];
                     
-                    this.prevLeftPos.copy(currentPos);
-                    moving = true;
-                }
-
-                // Process Right Hand Movement
-                if (this.isRightGrabbing && this.data.rightHand) {
-                    const currentPos = this.data.rightHand.object3D.position;
-                    const delta = new THREE.Vector3().subVectors(currentPos, this.prevRightPos);
+                    box.setAttribute('position', { x: x, y: h / 2, z: z });
+                    box.setAttribute('height', h);
+                    box.setAttribute('width', Math.random() * 1.5 + 0.5);
+                    box.setAttribute('depth', Math.random() * 1.5 + 0.5);
+                    box.setAttribute('color', color);
+                    box.setAttribute('shadow', 'cast: true; receive: true');
                     
-                    delta.y = 0; 
-                    rigPos.addScaledVector(delta, -this.data.multiplier);
-                    
-                    this.prevRightPos.copy(currentPos);
-                    moving = true;
-                }
-
-                // Update HUD Feedback
-                if (this.statusText) {
-                    if (moving) {
-                        this.statusText.setAttribute('value', 'Action: Grabbing & Pulling');
-                        this.statusText.setAttribute('color', '#00FF00');
-                    } else {
-                        this.statusText.setAttribute('value', 'Status: Idle\nPinch and pull the air to move');
-                        this.statusText.setAttribute('color', '#FFFFFF');
-                    }
+                    this.el.appendChild(box);
                 }
             }
         });
 
         /**
-         * 2. ENVIRONMENT GENERATOR
-         * Simple procedural world to provide visual flow/reference.
+         * 2. OPTIC FLOW DUST
          */
-        AFRAME.registerComponent('environment-generator', {
-            init: function () {
-                // Ground
-                const floor = document.createElement('a-plane');
-                floor.setAttribute('rotation', '-90 0 0');
-                floor.setAttribute('width', '200');
-                floor.setAttribute('height', '200');
-                floor.setAttribute('color', '#111');
-                this.el.appendChild(floor);
-
-                // Grid helper
-                const grid = document.createElement('a-grid');
-                grid.setAttribute('width', '200');
-                grid.setAttribute('height', '200');
-                this.el.appendChild(grid);
-
-                // Markers/Pillars
-                for (let i = 0; i < 100; i++) {
-                    const pillar = document.createElement('a-cylinder');
-                    const x = (Math.random() - 0.5) * 150;
-                    const z = (Math.random() - 0.5) * 150;
-                    if (Math.abs(x) < 5 && Math.abs(z) < 5) continue;
-
-                    pillar.setAttribute('position', { x: x, y: 2, z: z });
-                    pillar.setAttribute('radius', '0.2');
-                    pillar.setAttribute('height', '4');
-                    pillar.setAttribute('color', 'hsl(' + (Math.random() * 360) + ', 70%, 60%)');
-                    this.el.appendChild(pillar);
+        AFRAME.registerComponent('optic-flow-dust', {
+            init: function() {
+                this.count = 600;
+                this.range = 20;
+                const geometry = new THREE.BufferGeometry();
+                const positions = new Float32Array(this.count * 3);
+                
+                for(let i = 0; i < this.count * 3; i++) {
+                    positions[i] = (Math.random() - 0.5) * this.range;
                 }
+                
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                const material = new THREE.PointsMaterial({
+                    color: 0xffffff, size: 0.05, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending
+                });
+                
+                this.points = new THREE.Points(geometry, material);
+                this.el.setObject3D('mesh', this.points);
+            },
+            tick: function() {
+                const rigPos = document.querySelector('#rig').object3D.position;
+                const positions = this.points.geometry.attributes.position.array;
+                for(let i = 0; i < this.count; i++) {
+                    let dx = positions[i*3] - rigPos.x;
+                    let dy = positions[i*3+1] - rigPos.y;
+                    let dz = positions[i*3+2] - rigPos.z;
+                    if (dx > this.range/2) positions[i*3] -= this.range;
+                    if (dx < -this.range/2) positions[i*3] += this.range;
+                    if (dy > this.range/2) positions[i*3+1] -= this.range;
+                    if (dy < -this.range/2) positions[i*3+1] += this.range;
+                    if (dz > this.range/2) positions[i*3+2] -= this.range;
+                    if (dz < -this.range/2) positions[i*3+2] += this.range;
+                }
+                this.points.geometry.attributes.position.needsUpdate = true;
+            }
+        });
+
+        /**
+         * 3. 1:1 DIRECT DRAG LOCOMOTION (Merged from user code)
+         * - Uses direct frame-by-frame delta calculation.
+         * - Locks Y axis (delta.y = 0) for horizontal plane movement.
+         * - Replaces momentum/joystick with instant stopping.
+         */
+        AFRAME.registerComponent('hand-locomotion', {
+            schema: {
+                multiplier: { type: 'number', default: 2.0 }, // Pull sensitivity
+                worldLimit: { type: 'number', default: 48.0 } // Keeps player on grid
+            },
+
+            init: function () {
+                this.activeHand = null;
+                this.isPinching = false;
+                
+                // Track previous local position to calculate delta
+                this.prevHandLocalPos = new THREE.Vector3(); 
+                
+                this.debugText = document.querySelector('#dashboard-text');
+
+                this.onPinchStart = this.onPinchStart.bind(this);
+                this.onPinchEnd = this.onPinchEnd.bind(this);
+            },
+
+            play: function () {
+                const attachEvents = (hand) => {
+                    hand.addEventListener('pinchstarted', this.onPinchStart);
+                    hand.addEventListener('pinchended', this.onPinchEnd);
+                };
+
+                document.querySelectorAll('[hand-tracking-controls]').forEach(attachEvents);
+
+                this.el.sceneEl.addEventListener('child-attached', (evt) => {
+                    if (evt.detail.el.hasAttribute('hand-tracking-controls')) {
+                        attachEvents(evt.detail.el);
+                    }
+                });
+                
+                this.updateDashboard('SYSTEM IDLE\nPinch and pull the air to move.', '#FFFFFF');
+            },
+
+            updateDashboard: function(text, color) {
+                if (this.debugText) {
+                    this.debugText.setAttribute('value', text);
+                    if (color) this.debugText.setAttribute('color', color);
+                }
+            },
+
+            onPinchStart: function (evt) {
+                // Prevent grabbing with a second hand if already driving
+                if (this.isPinching) return; 
+                
+                this.activeHand = evt.target;
+                this.isPinching = true;
+                
+                // Store the starting local position of the hand
+                this.prevHandLocalPos.copy(this.activeHand.object3D.position);
+                
+                this.updateDashboard('ACTION: GRABBING & PULLING', '#00FFAA');
+            },
+
+            onPinchEnd: function (evt) {
+                // Release grab only if it's the active hand
+                if (this.activeHand === evt.target) {
+                    this.isPinching = false;
+                    this.activeHand = null;
+                    
+                    this.updateDashboard('SYSTEM IDLE\nPinch and pull the air to move.', '#FFFFFF');
+                }
+            },
+            
+            tick: function () {
+                if (this.isPinching && this.activeHand) {
+                    const rigPos = this.el.object3D.position;
+                    const currentHandPos = this.activeHand.object3D.position;
+                    
+                    // 1. Calculate hand movement delta since last frame
+                    const delta = new THREE.Vector3().subVectors(currentHandPos, this.prevHandLocalPos);
+                    
+                    // 2. We only want horizontal movement (ignore Y axis)
+                    delta.y = 0; 
+                    
+                    // 3. Apply inverse movement to rig (pulling hand back moves player forward)
+                    rigPos.addScaledVector(delta, -this.data.multiplier);
+                    
+                    // 4. Update previous position for the next frame's calculation
+                    this.prevHandLocalPos.copy(currentHandPos);
+                }
+
+                // --- WORLD BOUNDARIES ---
+                // Keeps player inside the designated play area even when dragging
+                let pos = this.el.object3D.position;
+                let limit = this.data.worldLimit;
+                
+                if (pos.x > limit) pos.x = limit;
+                if (pos.x < -limit) pos.x = -limit;
+                if (pos.z > limit) pos.z = limit;
+                if (pos.z < -limit) pos.z = -limit;
+                
+                // Hard floor lock at Y=0 (since delta.y = 0, this just ensures spawn safety)
+                if (pos.y < 0) pos.y = 0;
             }
         });
     </script>
 </head>
 <body>
-    <a-scene webxr="optionalFeatures: hand-tracking">
+    <a-scene background="color: #0b0c10" shadow="type: pcfsoft" webxr="optionalFeatures: hand-tracking, hit-test;">
         
-        <!-- Procedural World -->
-        <a-entity environment-generator></a-entity>
+        <!-- Environment Modules -->
+        <a-entity optic-flow-dust></a-entity>
+        <a-entity environment-scatter></a-entity>
 
-        <!-- Player Rig -->
-        <a-entity id="rig" grab-locomotion position="0 0 0">
-            <a-camera id="camera" position="0 1.6 0" wasd-controls-enabled="false">
-                <!-- Status Display -->
-                <a-text 
-                    id="status-text" 
-                    value="Initializing..." 
-                    position="0 -0.4 -1" 
-                    align="center" 
-                    width="1.5"
-                    font="mozillavr"
-                ></a-text>
+        <!-- Start Menu / Liquid Glass Instructions Panel -->
+        <a-entity position="0 2.2 -4" rotation="0 0 0">
+            
+            <a-box width="5.2" height="3.4" depth="0.04" 
+                   material="color: #ffffff; transparent: true; opacity: 0.12; roughness: 0.0; metalness: 1.0;" 
+                   position="0 0 -0.02"></a-box>
+            
+            <a-plane width="5.25" height="3.45" 
+                     material="color: #45a29e; shader: flat; transparent: true; opacity: 0.25;" 
+                     position="0 0 -0.04"></a-plane>
+
+            <a-plane width="4.8" height="0.6" position="0 1.2 0.01"
+                     material="color: #66FCF1; transparent: true; opacity: 0.15; shader: flat;"></a-plane>
+            <a-text value="DIRECT DRAG LOCOMOTION" 
+                    font="exo2bold" align="center" width="6.5" color="#66FCF1" position="0 1.2 0.02" letter-spacing="1.5"></a-text>
+
+            <a-plane width="4.8" height="0.45" position="0 0.5 0.01"
+                     material="color: #ffffff; transparent: true; opacity: 0.05; shader: flat;"></a-plane>
+            <a-text value="1. PINCH fingers to grab the space in front of you." 
+                    font="roboto" align="left" width="4.5" color="#ffffff" position="-2.2 0.5 0.02"></a-text>
+
+            <a-plane width="4.8" height="0.45" position="0 -0.05 0.01"
+                     material="color: #ffffff; transparent: true; opacity: 0.05; shader: flat;"></a-plane>
+            <a-text value="2. PULL your hand backward to drag yourself forward." 
+                    font="roboto" align="left" width="4.5" color="#ffffff" position="-2.2 -0.05 0.02"></a-text>
+
+            <a-plane width="4.8" height="0.45" position="0 -0.6 0.01"
+                     material="color: #ffffff; transparent: true; opacity: 0.05; shader: flat;"></a-plane>
+            <a-text value="3. RELEASE pinch to stop instantly. No sliding." 
+                    font="roboto" align="left" width="4.5" color="#ffffff" position="-2.2 -0.6 0.02"></a-text>
+
+            <a-plane width="4.8" height="0.45" position="0 -1.15 0.01"
+                     material="color: #66FCF1; transparent: true; opacity: 0.12; shader: flat;"></a-plane>
+            <a-text value="Movement is locked horizontally to keep you grounded." 
+                    font="roboto" align="center" width="4.5" color="#E0FFFF" position="0 -1.15 0.02"></a-text>
+
+        </a-entity>
+
+        <!-- Lighting -->
+        <a-light type="ambient" color="#404040"></a-light>
+        <a-light type="directional" position="5 10 -5" intensity="1.2" shadow="cast: true; shadowMapHeight: 2048; shadowMapWidth: 2048; shadowCameraNear: -10;"></a-light>
+        <a-light type="point" position="0 3 0" intensity="0.5" color="#66FCF1"></a-light>
+
+        <!-- Infinite Floor Grid -->
+        <a-plane 
+            position="0 0 0" 
+            rotation="-90 0 0" 
+            width="200" 
+            height="200" 
+            material="src: url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%231f2833'/%3E%3Cpath d='M200 0 L0 0 0 200' fill='none' stroke='%2345a29e' stroke-width='1' opacity='0.3'/%3E%3C/svg%3E); repeat: 200 200; roughness: 0.8; metalness: 0.2;" 
+            shadow="receive: true">
+        </a-plane>
+
+        <!-- PLAYER RIG -->
+        <a-entity id="rig" hand-locomotion="multiplier: 2.0; worldLimit: 48.0;">
+            
+            <a-camera position="0 1.6 0">
+                <a-entity position="0 -0.4 -0.8">
+                    <a-plane width="1.2" height="0.2" color="#0b0c10" opacity="0.8" border-radius="0.05"></a-plane>
+                    <a-text id="dashboard-text" value="Loading Systems..." position="0 0 0.01" align="center" width="1.2" color="#66FCF1"></a-text>
+                </a-entity>
             </a-camera>
-
-            <!-- Hand Entities -->
-            <a-entity id="leftHand" hand-tracking-controls="hand: left;"></a-entity>
-            <a-entity id="rightHand" hand-tracking-controls="hand: right;"></a-entity>
+            
+            <a-entity id="leftHand" hand-tracking-controls="hand: left; modelStyle: dots; modelColor: #45a29e;"></a-entity>
+            <a-entity id="rightHand" hand-tracking-controls="hand: right; modelStyle: dots; modelColor: #45a29e;"></a-entity>
+            
         </a-entity>
 
     </a-scene>
